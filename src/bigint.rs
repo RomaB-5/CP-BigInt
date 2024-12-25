@@ -40,6 +40,22 @@ impl<const MAX_SIZE: usize> std::ops::Mul for BigInt<MAX_SIZE> {
     }
 }
 
+impl<const MAX_SIZE: usize> std::ops::Div for BigInt<MAX_SIZE> {
+    type Output = Self;
+
+    fn div(self, other: Self) -> Self {
+        self.div(other).0
+    }
+}
+
+impl<const MAX_SIZE: usize> std::ops::Rem for BigInt<MAX_SIZE> {
+    type Output = Self;
+
+    fn rem(self, other: Self) -> Self {
+        self.div(other).1
+    }
+}
+
 impl<const MAX_SIZE: usize> std::cmp::PartialEq for BigInt<MAX_SIZE> {
     fn eq(&self, other: &Self) -> bool {
         self.equal(*other)
@@ -76,10 +92,7 @@ impl<const MAX_SIZE: usize> std::fmt::Display for BigInt<MAX_SIZE> {
 }
 
 impl<const MAX_SIZE: usize> BigInt<MAX_SIZE> {
-    pub const DEFAULT: Self = {
-        assert!(MAX_SIZE > 18, "use i128 instead of BigInt");
-        Self { is_negative: false, digits: [0; MAX_SIZE], current_size: 1}
-    };
+    pub const DEFAULT: Self = Self { is_negative: false, digits: [0; MAX_SIZE], current_size: 1};
 
     pub const fn from_str(s: &str) -> Self {
         let mut result = Self::DEFAULT;
@@ -87,7 +100,7 @@ impl<const MAX_SIZE: usize> BigInt<MAX_SIZE> {
         let chars = s.as_bytes();
         result.is_negative = chars[0] == '-' as u8;
 
-        let mut i = MAX_SIZE - chars.len() + result.is_negative as usize;
+        let mut i = MAX_SIZE + result.is_negative as usize - chars.len();
         result.current_size = MAX_SIZE - i;
 
         while i < MAX_SIZE {
@@ -112,6 +125,18 @@ impl<const MAX_SIZE: usize> BigInt<MAX_SIZE> {
         result
     }
 
+    pub const fn const_clone(&self) -> Self {
+        let mut result = Self::DEFAULT;
+        result.is_negative = self.is_negative;
+        result.current_size = self.current_size;
+        let mut i = MAX_SIZE - self.current_size;
+        while i < MAX_SIZE {
+            result.digits[i] = self.digits[i];
+            i += 1;
+        }
+        result
+    }
+
     pub const fn max_size(&self) -> usize {
         MAX_SIZE
     }
@@ -122,6 +147,10 @@ impl<const MAX_SIZE: usize> BigInt<MAX_SIZE> {
 
     pub const fn is_zero(&self) -> bool {
         self.current_size == 1 && self.digits[MAX_SIZE - 1] == 0
+    }
+
+    pub const fn is_even(&self) -> bool {
+        self.digits[MAX_SIZE - 1] % 2 == 0
     }
     
     pub const fn add(self, other: Self) -> Self {
@@ -277,7 +306,7 @@ impl<const MAX_SIZE: usize> BigInt<MAX_SIZE> {
             return false;
         }
 
-        let mut i = MAX_SIZE - self.current_size - 1;
+        let mut i = MAX_SIZE - self.current_size;
         while i < MAX_SIZE {
             if self.digits[i] != other.digits[i] {
                 return false;
@@ -328,6 +357,128 @@ impl<const MAX_SIZE: usize> BigInt<MAX_SIZE> {
         }
         result.is_negative = self.is_negative ^ other.is_negative;
         result
+    }
+
+    // self / other
+    pub const fn div(self, other: Self) -> (Self, Self) {
+        let mut quotient = Self::DEFAULT;
+        let mut remainder = Self::DEFAULT;
+        if self.is_zero() {
+            return (quotient, remainder);
+        }
+        if other.is_zero() {
+            panic!("division by zero");
+        }
+
+
+        let mut divident = self.const_clone();
+        let len = other.current_size;
+        let mut shift = 0;
+
+        'outer: loop {
+            let mut num = 0u8;
+            'inner: loop {
+                let lhs_pos = MAX_SIZE + shift - divident.current_size;
+                let rhs_pos = MAX_SIZE - other.current_size;
+                
+                if lhs_pos + len - 1 >= MAX_SIZE && lhs_pos + len - 1 >= MAX_SIZE {
+                    break 'outer;
+                }
+
+                // compare the two numbers
+                let mut pos = 0;
+                if MAX_SIZE + shift < divident.current_size + 1 || divident.digits[MAX_SIZE + shift - divident.current_size - 1] == 0 {
+                    while pos < len {
+                        if divident.digits[lhs_pos + pos] > other.digits[rhs_pos + pos] {
+                            break; // divident is greater - subtract
+                        } else if divident.digits[lhs_pos + pos] < other.digits[rhs_pos + pos] {
+                            break 'inner; // divident is smaller - shift
+                        }
+                        pos += 1;
+                    }
+                }
+
+
+                // subtract
+                let mut pos = 0;
+                let mut borrow = 0;
+                let lhs_pos = MAX_SIZE - divident.current_size + shift + len - 1;
+                let rhs_pos = MAX_SIZE - other.current_size + len - 1;
+                while pos < len {
+                    let diff = 10 + divident.digits[lhs_pos - pos] as i16 - other.digits[rhs_pos - pos] as i16 - borrow;
+                    divident.digits[lhs_pos - pos] = (diff % 10) as u8;
+                    borrow = (diff / 10) ^ 1;
+                    pos += 1;
+                }
+
+                // subtract the borrow
+                if lhs_pos >= pos {
+                    assert!(divident.digits[lhs_pos - pos] as i16 >= borrow, "borrow is greater than the digit");
+                    divident.digits[lhs_pos - pos] -= borrow as u8;
+                } else {
+                    assert!(borrow == 0, "borrow is not zero");
+                }
+
+                num += 1;
+                
+                
+            }
+            quotient.digits[shift] = num;
+            shift += 1;
+
+        }
+
+        // move digits to the right
+        let mut i = 1;
+        while i <= shift {
+            let value = quotient.digits[shift - i];
+            quotient.digits[shift - i] = 0;
+            quotient.digits[MAX_SIZE - i] = value;
+            i += 1;
+        }
+        quotient.current_size = shift;
+
+        // check if the real length is less than current_size
+        let mut i = MAX_SIZE - shift;
+        while i < MAX_SIZE {
+            if quotient.digits[i] != 0 {
+                quotient.current_size = MAX_SIZE - i;
+                break;
+            }
+            i += 1;
+        }
+
+        // copy the remainder
+        let mut i = MAX_SIZE - divident.current_size;
+        while i < MAX_SIZE {
+            remainder.digits[i] = divident.digits[i];
+            i += 1;
+        }
+
+        // check if the real length is less than current_size
+        let mut i = MAX_SIZE - divident.current_size;
+        while i < MAX_SIZE {
+            if remainder.digits[i] != 0 {
+                remainder.current_size = MAX_SIZE - i;
+                break;
+            }
+            i += 1;
+        }
+
+        quotient.is_negative = self.is_negative ^ other.is_negative;
+        remainder.is_negative = self.is_negative | (self.is_negative && other.is_negative);
+
+        quotient.current_size = const_helpers::max!(quotient.size(), 1);
+
+        if quotient.is_zero() {
+            quotient.is_negative = false;
+        }
+
+        if remainder.is_zero() {
+            remainder.is_negative = false;
+        }
+
+        (quotient, remainder)
     }
     
 }
@@ -503,7 +654,7 @@ mod tests {
                 let result = (x + y).to_string();
                 let x1: BigIntTest = BigInt::from_str(&x_str);
                 let y1: BigIntTest = BigInt::from_str(&y_str);
-                let result1: BigIntTest = x1+ y1;
+                let result1: BigIntTest = x1 + y1;
                 let expected: BigIntTest = BigInt::from_str(&result);
                 assert_eq!(result1, expected, "{}", format!("{} + {} = {}", x, y, result));
             }
@@ -551,7 +702,7 @@ mod tests {
                 let result = (x - y).to_string();
                 let x1: BigIntTest = BigInt::from_str(&x_str);
                 let y1: BigIntTest = BigInt::from_str(&y_str);
-                let result1: BigIntTest = x1.sub(y1);
+                let result1: BigIntTest = x1 - y1;
                 let expected: BigIntTest = BigInt::from_str(&result);
                 assert_eq!(result1, expected, "{}", format!("{} - {} = {}", x, y, result));
             }
@@ -567,10 +718,45 @@ mod tests {
                 let result = (x * y).to_string();
                 let x1: BigIntTest = BigInt::from_str(&x_str);
                 let y1: BigIntTest = BigInt::from_str(&y_str);
-                let result1: BigIntTest = x1.mul(y1);
+                let result1: BigIntTest = x1 * y1;
                 let expected: BigIntTest = BigInt::from_str(&result);
                 assert_eq!(result1, expected, "{}", format!("{} * {} = {}", x, y, result));
             }
         }
+    }
+
+    #[test]
+    fn div(){
+        type I3 = BigInt<3>;
+        for x in -999..=999i32 {
+            for y in -999..=999i32 {
+                if y == 0 {
+                    continue;
+                }
+                let x_str = x.to_string();
+                let y_str = y.to_string();
+                let result = (x / y).to_string();
+                let result_rem = (x % y).to_string();
+                let x1: I3 = BigInt::from_str(&x_str);
+                let y1: I3 = BigInt::from_str(&y_str);
+                let (result1, result2) = x1.div(y1);
+                let expected: I3 = BigInt::from_str(&result);
+                let expected_rem: I3 = BigInt::from_str(&result_rem);
+                assert_eq!(result1, expected, "{}", format!("{} / {} = {}", x, y, result));
+                assert_eq!(result2, expected_rem, "{}", format!("{} % {} = {}", x, y, result_rem));
+            }
+        }
+    }
+
+    #[test]
+    fn div_2() {
+        const A: BigIntTest = BigInt::from_str("33322211112345678987654321");
+        const B: BigIntTest = BigInt::from_str("15485863");
+        const DIV: BigIntTest = BigInt::from_str("2151782636353277759");
+        const REM: BigIntTest = BigInt::from_str("10833304");
+
+        const RES: (BigIntTest, BigIntTest) = A.div(B);
+        assert_eq!(RES.0, DIV);
+        assert_eq!(RES.1, REM);
     }
 }
